@@ -10,35 +10,44 @@ using LocationWeb.Shared.Models;
 
 namespace LocationWeb.Server.Controllers
 {
+    [Route("FileProgects")]
     public class FileProgectsController : Controller
     {
         private readonly ApplicationDbContext _context;
+        private readonly ILogger<FileProgectsController> _logger;
 
-        public FileProgectsController(ApplicationDbContext context)
+        public FileProgectsController(ApplicationDbContext context, ILogger<FileProgectsController> logger)
         {
-            _context = context;
+            _context = context ?? throw new ArgumentNullException(nameof(context));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
         // GET: FileProgects
+        [HttpGet]
         public async Task<IActionResult> Index()
         {
-            var applicationDbContext = _context.FileProgect.Include(f => f.Project);
-            return View(applicationDbContext.ToListAsync());
+            var fileProgects = await _context.FileProgect
+                .Include(f => f.Project)
+                .AsNoTracking()
+                .ToListAsync();
+
+            return View(fileProgects);
         }
 
         // GET: FileProgects/Details/5
+        [HttpGet("Details/{id:int}")]
         public async Task<IActionResult> Details(int? id)
         {
-            if (id == null)
-            {
-                return NotFound()
-            }
+            if (id is null) return BadRequest("Invalid ID");
 
             var fileProgect = await _context.FileProgect
                 .Include(f => f.Project)
-                .FirstOrDefaultAsync(m => m.Id == id);
+                .AsNoTracking()
+                .FirstOrDefaultAsync(m => m.Id == id.Value);
+
             if (fileProgect == null)
             {
+                _logger.LogWarning("File progect with Id {Id} not found", id);
                 return NotFound();
             }
 
@@ -46,114 +55,229 @@ namespace LocationWeb.Server.Controllers
         }
 
         // GET: FileProgects/Create
+        [HttpGet("Create")]
         public IActionResult Create()
         {
-            ViewData["ProjectId"] = new SelectList(_context.Set<Project>(), "Id", "Id");
+            PopulateProjectsDropDown(); 
             return View();
         }
 
         // POST: FileProgects/Create
         // To protect from overposting attacks, enable the specific properties you want to bind to.
         // For more details, see http://go.microsoft.com/fwlink/?LinkId=317598.
+        [HttpPost("Create")]
         [ValidateAntiForgeryToken]
         public async Task<IActionResult> Create([Bind("Id,ProjectId,UrlFile")] FileProgect fileProgect)
         {
-            if (ModelState.IsValid)
+            if (!ModelState.IsValid)
+            {
+                PopulateProjectsDropDown(fileProgect.ProjectId);
+                return View(fileProgect);
+            }
+            try
             {
                 _context.Add(fileProgect);
                 await _context.SaveChangesAsync();
+
                 return RedirectToAction(nameof(Index));
             }
-            ViewData["ProjectId"] = new SelectList(_context.Set<Project>(), "Id", "Id", fileProgect.ProjectId);
-            return View(fileProgect);
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error creating file project");
+                ModelState.AddModelError("", "Error creating file project");
+
+                PopulateProjectsDropDown(fileProgect.ProjectId);
+                return View(fileProgect);
+            }
         }
 
         // GET: FileProgects/Edit/5
-        async Task<IActionResult> Edit(int? id)
+        [HttpGet("Edit/{id:int}")]
+        public async Task<IActionResult> Edit(int? id)
         {
-            if (id == null)
+            if (id is null) return BadRequest("Invalid ID");
+
+            var fileProgect = await _context.FileProgect.FindAsync(id.Value);
+            if (fileProgect == null)
             {
+                _logger.LogWarning("File project with ID {Id} not found for edit", id);
                 return NotFound();
             }
 
-            var fileProgect = _context.FileProgect.FindAsync(id);
-            if (fileProgect == null)
-            {
-                return NotFound();
-            }
-            ViewData["ProjectId"] = new SelectList(_context.Set<Project>(), "Id", "Id", fileProgect.ProjectId);
+            PopulateProjectsDropDown(fileProgect.ProjectId);
             return View(fileProgect);
         }
 
         // POST: FileProgects/Edit/5
         // To protect from overposting attacks, enable the specific properties you want to bind to.
         // For more details, see http://go.microsoft.com/fwlink/?LinkId=317598.
-        [HttpPost]
+        [HttpPost("Edit/{id:int}")]
         [ValidateAntiForgeryToken]
         public async Task<IActionResult> Edit(int id, [Bind("Id,ProjectId,UrlFile")] FileProgect fileProgect)
         {
             if (id != fileProgect.Id)
             {
-                return NotFound();
+                _logger.LogWarning("ID mismatch in edit: {RouteId} vs {ModelId}",id, fileProgect.Id);
+                return BadRequest("ID mismatch");
             }
 
-            if (ModelState.IsValid)
+            if (!ModelState.IsValid)
             {
-                try
-                {
-                    _context.Update(fileProgect);
-                    await _context.SaveChangesAsync();
-                }
-                catch (DbUpdateConcurrencyException)
-                {
-                    if (!FileProgectExists(fileProgect.Id))
-                    {
-                        return NotFound();
-                    }
-                    else
-                    {
-                        throw;
-                    }
-                }
+                PopulateProjectsDropDown(fileProgect.ProjectId);
+                return View(fileProgect);
+            }
+
+            try
+            {
+                _context.Update(fileProgect);
+                await _context.SaveChangesAsync();
+
                 return RedirectToAction(nameof(Index));
             }
-            ViewData["ProjectId"] = new SelectList(_context.Set<Project>(), "Id", "Id", fileProgect.ProjectId);
-            return View(fileProgect);
+            catch (DbUpdateConcurrencyException ex)
+            {
+                if (!await FileProgectExists(fileProgect.Id))
+                {
+                    _logger.LogWarning("Concurrency exception - file project not found");
+                    return NotFound();
+                }
+
+                _logger.LogError(ex, "Concurrency error updating file project");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error editing file project");
+                ModelState.AddModelError("", "Error saving changes");
+
+                PopulateProjectsDropDown(fileProgect.ProjectId);
+                return View(fileProgect);
+            }
         }
 
         // GET: FileProgects/Delete/5
+        [HttpGet("Delete/{id:int}")]
         public async Task<IActionResult> Delete(int? id)
         {
-            if (id == null)
-            {
-                return NotFound();
-            }
-
+            if (id is null) return BadRequest("Invalid ID");
+            
             var fileProgect = await _context.FileProgect
                 .Include(f => f.Project)
-                .FirstOrDefaultAsync(m => m.Id = id);
+                .AsNoTracking()
+                .FirstOrDefaultAsync(fp => fp.Id == id.Value);
+
             if (fileProgect == null)
             {
+                _logger.LogWarning("File project with ID {Id} not found for delete",id);
                 return NotFound();
             }
-
+            
             return View(fileProgect);
         }
 
         // POST: FileProgects/Delete/5
-        [HttpPost, ActionName("Delete")]
+        [HttpPost("Delete/{id:int}"), ActionName("Delete")]
         [ValidateAntiForgeryToken]
         public async Task<IActionResult> DeleteConfirmed(int id)
         {
-            var fileProgect = await _context.FileProgect.FindAsync(id);
-            _context.FileProgect.Remove(fileProgect);
-            await _context.SaveChangesAsync();
-            return RedirectToAction(name(Index));
+            var fileProject = await _context.FileProgect.FindAsync(id);
+            if (fileProject == null)
+            {
+                _logger.LogWarning("Attempt to delete non-existent file project with ID {Id}", id);
+                return NotFound();
+            }
+
+            try
+            {
+                _context.FileProgect.Remove(fileProject);
+                await _context.SaveChangesAsync();
+
+                return RedirectToAction(nameof(Index));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deleting file project with ID {Id}", id);
+                return StatusCode(500, "Error deleting project");
+            }
         }
 
-        private bool FileProgectExists(int id)
+        // POST: FileProgect/UpdateFileUrl/5
+        [HttpPost("UpdateFileUrl/{id:int}")]
+        public async Task<IActionResult> UpdateFileUrl(int id, [FromBody] UpdateUrlFileDto urlFile)
         {
-            return _context.FileProgect.Any(e => e.Id == id);
+            if (urlFile == null || string.IsNullOrWhiteSpace(urlFile.UrlFile))
+            {
+                _logger.LogWarning("Пустой запрос или URL");
+                return BadRequest(new
+                {
+                    success = false,
+                    error = "URL файла обязателен"
+                });
+            }
+            if (!Uri.IsWellFormedUriString(urlFile.UrlFile, UriKind.Absolute))
+            {
+                _logger.LogWarning("Некорректный URL: {Url}", urlFile.UrlFile);
+                return BadRequest(new
+                {
+                    success = false,
+                    error = "Неккоретный формат URl"
+
+                });
+            }
+
+            var fileProgect = await _context.FileProgect.FindAsync(id);
+            if (fileProgect == null)
+            {
+                _logger.LogWarning("Файл с ID {Id} не найден", id);
+                return NotFound(new
+                {
+                    success = false,
+                    error = "Файл с таким ID не найден"
+                });
+            }
+            try
+            {
+                fileProgect.UrlFile = urlFile.UrlFile;
+                await _context.SaveChangesAsync();
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "URL файла обновлён",
+                    fileProgect = new
+                    {
+                        fileProgect.Id,
+                        fileProgect.ProjectId,
+                        fileProgect.UrlFile
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при обновлении файла {Id}", id);
+                return StatusCode(500, new
+                {
+                    success = false,
+                    error = "Ошибка сервера при обновлении URL"
+                });
+            }
+        }
+
+        private async Task<bool> FileProgectExists(int id)
+        {
+            return await _context.FileProgect.AnyAsync(e => e.Id == id);
+        }
+        public class UpdateUrlFileDto
+        {
+            [Required(ErrorMessage = "URL файла обязателен")]
+            [Url(ErrorMessage = "Некорректный формат URL")]
+            public string UrlFile { get; set; }
+        }
+
+        private void PopulateProjectsDropDown(object selectedProject = null)
+        {
+            ViewData["ProjectId"] = new SelectList(_context.Project, "Id", "Name", selectedProject);
         }
     }
 }
+
